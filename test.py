@@ -154,11 +154,23 @@ def parse_args():
       raise argparse.ArgumentTypeError(f"{filepath} does not exist!")
     return path
 
-  parser = argparse.ArgumentParser(description=TESTSUITE_DESCRIPTION)
-  parser.add_argument('-p', '--processes', help="Maximum number of processes to use in parallel.", type=int, default=os.cpu_count())
-  parser.add_argument('-l', '--load-timeout', help="A test will be terminated if loading the script takes longer.", type=lambda x: timedelta(milliseconds=float(x)), default=timedelta(milliseconds=500))
-  parser.add_argument('-c', '--completion-timeout', help="A test will be terminated if it lives longer.", type=lambda x: timedelta(milliseconds=float(x)), default=timedelta(milliseconds=30000))
-  parser.add_argument('script', help="The script file to test. MUST end in '.py' (without quotes)!", nargs='+', type=filetype)
+  parser = argparse.ArgumentParser(description=TESTSUITE_DESCRIPTION, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  parser.add_argument('-p', '--processes',
+    help="Maximum number of processes to use in parallel.",
+    type=int,
+    default=os.cpu_count())
+  parser.add_argument('-l', '--load-timeout',
+    help="A test will be terminated if loading the script takes longer than this many milliseconds.",
+    type=lambda x: timedelta(milliseconds=float(x)),
+    default="1000")
+  parser.add_argument('-c', '--completion-timeout',
+    help="A test will be terminated if it takes longer than this many milliseconds.",
+    type=lambda x: timedelta(milliseconds=float(x)),
+    default="60000")
+  parser.add_argument('script',
+    help="The script file to test. MUST end in '.py' (without quotes)!",
+    nargs='+',
+    type=filetype)
   return parser.parse_args()
 
 def runtest(index: int, scriptpath: Path, queue: multiprocessing.Queue):
