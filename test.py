@@ -60,16 +60,21 @@ def test(lib, filename: Path):
 #   to https://github.com/SimonLammer/testpythonscript otherwise)
 ################################################################################
 
-LIBRARY_LOAD_TIMEOUT = timedelta(milliseconds=500)
-# TODO: completion timeout
-OUTPUT_REPORT_DELAY = timedelta(milliseconds=5)
+LOAD_TIMEOUT = None       # cli arg; Terminate the subprocess if importing the library takes longer
+COMPLETION_TIMEOUT = None # cli arg; Terminate the subprocess if takes longer to finish gracefully
+
 WAIT_DELAY = timedelta(milliseconds=50)
+OUTPUT_REPORT_DELAY = timedelta(milliseconds=5)
 TERMINATION_DELAY = OUTPUT_REPORT_DELAY + timedelta(milliseconds=2)
 
 def main():
   args = parse_args()
   scripts: List[Path] = args.script
   max_processes = args.processes
+  global LOAD_TIMEOUT
+  LOAD_TIMEOUT = args.load_timeout
+  global COMPLETION_TIMEOUT
+  COMPLETION_TIMEOUT = args.completion_timeout
 
   queue = multiprocessing.Queue() # for communication with subprocesses
 
@@ -84,15 +89,22 @@ def main():
   running: List[multiprocessing.Process] = []
 
   while len(ready) > 0 or len(running) > 0:
+    for i, p in enumerate(running):
+      if not p.is_alive():
+        print(f"process {p.pid} finished with exit code {p.exitcode}")
+        exitcodes[p.pid] = p.exitcode
+        p.join()
+        del running[i]
+
     while 0 < len(ready) and len(running) < max_processes:
       process = ready.pop()
       running.append(process)
       process.start()
 
     # print("timeouts", timeouts)
-    while queue.empty() and (len(timeouts) == 0 or timeouts[0][1] > datetime.now()) and running[0].is_alive():
+    while queue.empty() and (len(timeouts) == 0 or timeouts[0][1] > datetime.now()) and (len(running) > 0 and running[0].is_alive()):
       time.sleep(WAIT_DELAY.total_seconds())
-    
+
     while not queue.empty():
       pid, item = queue.get_nowait()
       if pid not in index_pid.values(): # item is the process index
@@ -102,8 +114,13 @@ def main():
         # print(f"process {pid} sent its output")
         outputs[pid] = item
       elif isinstance(item, datetime): # process set timeout
-        # print(f"setting timeout of pid {pid} ({item})")
-        timeouts.append((pid, item))
+        # print(f"setting timeout of pid {pid} to {item}")
+        for i, (p, t) in enumerate(timeouts):
+          if p == pid:
+            timeouts[i] = (pid, item)
+            break
+        else:
+          timeouts.append((pid, item))
       elif item is None: # process canceled timeout
         for i, (p, t) in enumerate(timeouts):
           if pid == p:
@@ -118,17 +135,10 @@ def main():
       if t > datetime.now():
         break
       for i, p in enumerate(running):
-        if pid == p.pid:
+        if pid == p.pid and p.is_alive():
           print(f"process {pid} exceeded its timeout {t} by {datetime.now() - t}, terminating")
           p.terminate()
-    
-    for i, p in enumerate(running):
-      if not p.is_alive():
-        print(f"process {p.pid} finished with exit code {p.exitcode}")
-        exitcodes[p.pid] = p.exitcode
-        p.join()
-        del running[i]
-  
+
   for i in range(len(scripts)):
     pid = index_pid[i]
     print('+' * 80)
@@ -145,30 +155,33 @@ def parse_args():
     return path
 
   parser = argparse.ArgumentParser(description=TESTSUITE_DESCRIPTION)
-  parser.add_argument('-p', '--processes', help="maximum number of processes to use in parallel", type=int, default=os.cpu_count())
+  parser.add_argument('-p', '--processes', help="Maximum number of processes to use in parallel.", type=int, default=os.cpu_count())
+  parser.add_argument('-l', '--load-timeout', help="A test will be terminated if loading the script takes longer.", type=lambda x: timedelta(milliseconds=float(x)), default=timedelta(milliseconds=500))
+  parser.add_argument('-c', '--completion-timeout', help="A test will be terminated if it lives longer.", type=lambda x: timedelta(milliseconds=float(x)), default=timedelta(milliseconds=30000))
   parser.add_argument('script', help="The script file to test. MUST end in '.py' (without quotes)!", nargs='+', type=filetype)
   return parser.parse_args()
 
 def runtest(index: int, scriptpath: Path, queue: multiprocessing.Queue):
   output = io.StringIO()
-  sys.stdout = sys.stderr = output
-  pid = multiprocessing.current_process().pid
-  queue.put((pid, index))
-
-  def reportoutput():
-    while True:
-      queue.put((pid, output.getvalue()))
-      time.sleep(OUTPUT_REPORT_DELAY.total_seconds())
-  t = threading.Thread(target=reportoutput, daemon=True)
-  t.start()
-
-  def testwrapper(lib, _):
-    queue.put((pid, None))
-    test(lib, scriptpath)
-  queue.put((pid, datetime.now() + LIBRARY_LOAD_TIMEOUT))
+  sys.stdout = output
+  sys.stderr = output
   try:
+    pid = multiprocessing.current_process().pid
+    queue.put((pid, index))
+
+    def reportoutput():
+      while True:
+        queue.put((pid, output.getvalue()))
+        time.sleep(OUTPUT_REPORT_DELAY.total_seconds())
+    t = threading.Thread(target=reportoutput, daemon=True)
+    t.start()
+
+    def testwrapper(lib, _):
+      queue.put((pid, datetime.now() + COMPLETION_TIMEOUT))
+      test(lib, scriptpath)
+    queue.put((pid, datetime.now() + LOAD_TIMEOUT))
     testscript(scriptpath, testwrapper)
-  except Exception as e:
+  except:
     traceback.print_exception(*sys.exc_info())
   queue.put((pid, output.getvalue()))
 
@@ -178,7 +191,7 @@ def testscript(scriptpath: Path, test: Callable):
   Runs some tests with the given script.
   '''
   assert(scriptpath.name.endswith('.py')) # thwart ModuleNotFoundError 
-  sys.path.insert(0, str(scriptpath.parent))
+  sys.path.insert(0, str(scriptpath.parent.absolute()))
   imported_library = import_module(scriptpath.name[:-3])
   test(imported_library, scriptpath)
   del imported_library
