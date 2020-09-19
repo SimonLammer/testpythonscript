@@ -6,11 +6,11 @@ This script provides a starting point to automate testing of other python script
 
 Consult `python3 test.py --help` for complete usage instructions.
 
-You may wish to run these tests within a docker container (to make more difficult for students to mess up your machine) with [this shell script](https://gist.github.com/SimonLammer/f863627f11221379d825f7a34d8f84c3)
+You may wish to run these tests within a docker container (to make it more difficult for students to mess up your machine) with [this shell script](https://gist.github.com/SimonLammer/f863627f11221379d825f7a34d8f84c3)
 
 ### Example
 
-Here's what happens when you run the current [`test.py`](./test.py) against the [`sample_script.py`](./sample_script.py):
+Here's what happens when you run the current [`test.py`](./test.py) against [`sample_script.py`](./sample_script.py):
 
 `python3 test.py sample_script.py`:
 ```
