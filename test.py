@@ -1,4 +1,5 @@
 #!/bin/python3
+# https://github.com/SimonLammer/testpythonscript
 """
 This can be used to test other python scripts.
 Other scripts will be imported and tested in a new subprocess each.
