@@ -31,22 +31,22 @@ class Test(unittest.TestCase):
 
   def test_foo(self):
     self.assertTrue(hasattr(LIBRARY, "foo"))
-    with captured_output() as (out, err):
+    with patched_io() as (stdin, stdout, stderr):
       LIBRARY.foo()
-      self.assertEqual("foo\nbar\n", out.getvalue())
+      self.assertEqual("foo\nbar\n", stdout.getvalue())
 
   def test_false(self):
     self.fail("Message")
 
 @contextmanager
-def captured_output() -> Tuple[io.StringIO, io.StringIO]:
-  new_out, new_err = io.StringIO(), io.StringIO()
-  old_out, old_err = sys.stdout, sys.stderr
+def patched_io(initial_in=None) -> Tuple[io.StringIO, io.StringIO, io.StringIO]:
+  new_in, new_out, new_err = io.StringIO(initial_in), io.StringIO(), io.StringIO()
+  old_in, old_out, old_err = sys.stdin, sys.stdout, sys.stderr
   try:
-    sys.stdout, sys.stderr = new_out, new_err
-    yield sys.stdout, sys.stderr
+    sys.stdin, sys.stdout, sys.stderr = new_in, new_out, new_err
+    yield sys.stdin, sys.stdout, sys.stderr
   finally:
-    sys.stdout, sys.stderr = old_out, old_err
+    sys.stdin, sys.stdout, sys.stderr = old_in, old_out, old_err
 
 def test(lib, filename: Path):
   global LIBRARY
