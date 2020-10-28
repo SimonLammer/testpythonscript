@@ -5,3 +5,4 @@ def foo():
   print("bar")
 
 print("sample_script.py loading")
+print("library load input() returned:", input())

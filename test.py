@@ -23,7 +23,7 @@ import unittest
 TESTSUITE_DESCRIPTION = "testpythonscript sample testsuite" # displayed in help message
 
 LIBRARY = None # This will be set to the imported script
-LIBRARY_LOAD_STDIN = "" # This will be fed to stdin while the library is loading
+LIBRARY_LOAD_STDIN = "patched stdin whilst loading the library" # This will be fed to stdin while the library is loading
 
 class Test(unittest.TestCase):
   def test_initial_attributes(self):
