@@ -37,13 +37,14 @@ class Test(unittest.TestCase):
       self.assertEqual("foo\nbar\n", stdout.getvalue())
 
   def test_false(self):
-    self.fail("Message")
+    self.assertTrue(LIBRARY.return_true())
 
 
 def test(lib, filename: Path, lib_load_stdout, lib_load_stderr):
   global LIBRARY
   LIBRARY = lib
-  print("Library load stdout:", lib_load_stdout.getvalue())
+  print("Library load stdout:")
+  print(lib_load_stdout.getvalue())
   unittest.main(argv=['first-arg-is-ignored'], verbosity=2, exit=False) # https://medium.com/@vladbezden/using-python-unittest-in-ipython-or-jupyter-732448724e31
   LIBRARY = None
   print(f"Completed testing {filename}")

@@ -4,5 +4,8 @@ def foo():
   print("foo")
   print("bar")
 
+def return_true():
+  return False
+
 print("sample_script.py loading")
-print("library load input() returned:", input())
+print("Library load input() returned:", input())
