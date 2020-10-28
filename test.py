@@ -23,6 +23,7 @@ import unittest
 TESTSUITE_DESCRIPTION = "testpythonscript sample testsuite" # displayed in help message
 
 LIBRARY = None # This will be set to the imported script
+LIBRARY_LOAD_STDIN = "patched stdin whilst loading the library" # This will be fed to stdin while the library is loading
 
 class Test(unittest.TestCase):
   def test_initial_attributes(self):
@@ -36,21 +37,14 @@ class Test(unittest.TestCase):
       self.assertEqual("foo\nbar\n", stdout.getvalue())
 
   def test_false(self):
-    self.fail("Message")
+    self.assertTrue(LIBRARY.return_true())
 
-@contextmanager
-def patched_io(initial_in=None) -> Tuple[io.StringIO, io.StringIO, io.StringIO]:
-  new_in, new_out, new_err = io.StringIO(initial_in), io.StringIO(), io.StringIO()
-  old_in, old_out, old_err = sys.stdin, sys.stdout, sys.stderr
-  try:
-    sys.stdin, sys.stdout, sys.stderr = new_in, new_out, new_err
-    yield sys.stdin, sys.stdout, sys.stderr
-  finally:
-    sys.stdin, sys.stdout, sys.stderr = old_in, old_out, old_err
 
-def test(lib, filename: Path):
+def test(lib, filename: Path, lib_load_stdout, lib_load_stderr):
   global LIBRARY
   LIBRARY = lib
+  print("Library load stdout:")
+  print(lib_load_stdout.getvalue())
   unittest.main(argv=['first-arg-is-ignored'], verbosity=2, exit=False) # https://medium.com/@vladbezden/using-python-unittest-in-ipython-or-jupyter-732448724e31
   LIBRARY = None
   print(f"Completed testing {filename}")
@@ -67,6 +61,16 @@ COMPLETION_TIMEOUT = None # cli arg; Terminate the subprocess if takes longer to
 WAIT_DELAY = timedelta(milliseconds=50)
 OUTPUT_REPORT_DELAY = timedelta(milliseconds=5)
 TERMINATION_DELAY = OUTPUT_REPORT_DELAY + timedelta(milliseconds=2)
+
+@contextmanager
+def patched_io(initial_in=None) -> Tuple[io.StringIO, io.StringIO, io.StringIO]:
+  new_in, new_out, new_err = io.StringIO(initial_in), io.StringIO(), io.StringIO()
+  old_in, old_out, old_err = sys.stdin, sys.stdout, sys.stderr
+  try:
+    sys.stdin, sys.stdout, sys.stderr = new_in, new_out, new_err
+    yield sys.stdin, sys.stdout, sys.stderr
+  finally:
+    sys.stdin, sys.stdout, sys.stderr = old_in, old_out, old_err
 
 def main():
   args = parse_args()
@@ -189,11 +193,14 @@ def runtest(index: int, scriptpath: Path, queue: multiprocessing.Queue):
     t = threading.Thread(target=reportoutput, daemon=True)
     t.start()
 
-    def testwrapper(lib, _):
-      queue.put((pid, datetime.now() + COMPLETION_TIMEOUT))
-      test(lib, scriptpath)
-    queue.put((pid, datetime.now() + LOAD_TIMEOUT))
-    testscript(scriptpath, testwrapper)
+    original_stdin, original_stdout, original_stderr = sys.stdin, sys.stdout, sys.stderr
+    with patched_io(LIBRARY_LOAD_STDIN) as (_, stdout, stderr):
+      def testwrapper(lib, _):
+        sys.stdin, sys.stdout, sys.stderr = original_stdin, original_stdout, original_stderr
+        queue.put((pid, datetime.now() + COMPLETION_TIMEOUT))
+        test(lib, scriptpath, stdout, stderr)
+      queue.put((pid, datetime.now() + LOAD_TIMEOUT))
+      testscript(scriptpath, testwrapper)
   except:
     traceback.print_exception(*sys.exc_info())
   queue.put((pid, output.getvalue()))
