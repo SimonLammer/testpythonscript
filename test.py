@@ -81,8 +81,7 @@ class Test(unittest.TestCase):
 ################################################################################
 
 
-LOAD_TIMEOUT = None       # cli arg; Terminate the subprocess if importing the library takes longer
-COMPLETION_TIMEOUT = None # cli arg; Terminate the subprocess if takes longer to finish gracefully
+TIMEOUT = None # cli arg; Terminate the subprocess if takes longer to finish gracefully
 
 WAIT_DELAY = timedelta(milliseconds=50)
 OUTPUT_REPORT_DELAY = timedelta(milliseconds=5)
@@ -106,10 +105,8 @@ def main():
   args = parse_args()
   scripts: List[Path] = args.script
   max_processes = args.processes
-  global LOAD_TIMEOUT
-  LOAD_TIMEOUT = args.load_timeout
-  global COMPLETION_TIMEOUT
-  COMPLETION_TIMEOUT = args.completion_timeout
+  global TIMEOUT
+  TIMEOUT = args.timeout
 
   # queue = multiprocessing.Queue() # for communication with subprocesses
 
@@ -195,14 +192,10 @@ def parse_args():
     help="Maximum number of processes to use in parallel.",
     type=int,
     default=os.cpu_count())
-  parser.add_argument('-l', '--load-timeout',
-    help="A test will be terminated if loading the script takes longer than this many milliseconds.",
-    type=lambda x: timedelta(milliseconds=float(x)),
-    default="1000")
-  parser.add_argument('-c', '--completion-timeout',
-    help="A test will be terminated if it takes longer than this many milliseconds.",
-    type=lambda x: timedelta(milliseconds=float(x)),
-    default="60000")
+  parser.add_argument('-t', '--timeout',
+    help="A test will be terminated if it takes longer than this many seconds.",
+    type=lambda x: timedelta(seconds=float(x)),
+    default="60")
   parser.add_argument('script',
     help="The script file to test. MUST end in '.py' (without quotes)!",
     nargs='+',
@@ -224,7 +217,7 @@ def runtest(test_function: Callable, index: int, scriptpath: Path, queue: multip
     t = threading.Thread(target=reportoutput, daemon=True)
     t.start()
 
-    queue.put((pid, datetime.now() + COMPLETION_TIMEOUT))
+    queue.put((pid, datetime.now() + TIMEOUT))
     test_function(scriptpath)
   except:
     traceback.print_exception(*sys.exc_info())
