@@ -8,7 +8,8 @@ Other scripts will be imported and tested in a new subprocess each.
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-from importlib import import_module
+from functools import wraps
+from importlib import import_module, reload
 import io
 import multiprocessing
 import os
@@ -18,36 +19,60 @@ import threading
 import time
 import traceback
 from typing import Callable, Dict, List, Optional, Tuple
-import unittest
+import unittest # This module is not necessary for the testsuite, but will probably ease your testing
+
+
+LIBRARY = None # This will be set to the imported script
+LIBRARY_PATH = None # This will be set to the imported script's path
+
+def load_library_patched(stdin=""):
+  '''Decorator for reloading the library stored in LIBRARY'''
+  def outer(func):
+    @wraps(func)
+    def inner(*args, **kwargs):
+      global LIBRARY
+      with patched_io(stdin) as (_, stdout, stderr):
+        LIBRARY = load_library(LIBRARY_PATH)
+      func(*args, stdout, stderr, **kwargs)
+    return inner
+  return outer
+
+
+################################################################################
+# Add your tests below this comment.
+################################################################################
+
 
 TESTSUITE_DESCRIPTION = "testpythonscript sample testsuite" # displayed in help message
 
-LIBRARY = None # This will be set to the imported script
-LIBRARY_LOAD_STDIN = "patched stdin whilst loading the library" # This will be fed to stdin while the library is loading
+def test_main(library_path: Path):
+  global LIBRARY_PATH
+  LIBRARY_PATH = library_path
+  unittest.main(argv=['first-arg-is-ignored'], verbosity=2, exit=False) # https://medium.com/@vladbezden/using-python-unittest-in-ipython-or-jupyter-732448724e31
+
+  print(f"Completed testing {library_path}")
 
 class Test(unittest.TestCase):
-  def test_initial_attributes(self):
+  @load_library_patched(stdin="\n")
+  def test_initial_attributes(self, load_stdout, load_stderr):
     self.assertTrue(hasattr(LIBRARY, "LIVES"))
     self.assertEqual(LIBRARY.LIVES, 3)
 
-  def test_foo(self):
+  @load_library_patched(stdin="\n")
+  def test_foo(self, load_stdout, load_stderr):
     self.assertTrue(hasattr(LIBRARY, "foo"))
     with patched_io() as (stdin, stdout, stderr):
       LIBRARY.foo()
       self.assertEqual("foo\nbar\n", stdout.getvalue())
 
-  def test_false(self):
+  @load_library_patched(stdin="\n")
+  def test_false(self, load_stdout, load_stderr):
     self.assertTrue(LIBRARY.return_true())
 
+  @load_library_patched(stdin="Some stdin patch")
+  def test_library_load_stdin(self, load_stdout, load_stderr):
+    self.assertEqual(f"Library load input() returned: Some stdin patch\n", load_stdout.readlines()[1])
 
-def test(lib, filename: Path, lib_load_stdout, lib_load_stderr):
-  global LIBRARY
-  LIBRARY = lib
-  print("Library load stdout:")
-  print(lib_load_stdout.getvalue())
-  unittest.main(argv=['first-arg-is-ignored'], verbosity=2, exit=False) # https://medium.com/@vladbezden/using-python-unittest-in-ipython-or-jupyter-732448724e31
-  LIBRARY = None
-  print(f"Completed testing {filename}")
 
 ################################################################################
 # The testsuite's internals are below.
@@ -55,12 +80,14 @@ def test(lib, filename: Path, lib_load_stdout, lib_load_stderr):
 #   to https://github.com/SimonLammer/testpythonscript otherwise)
 ################################################################################
 
-LOAD_TIMEOUT = None       # cli arg; Terminate the subprocess if importing the library takes longer
-COMPLETION_TIMEOUT = None # cli arg; Terminate the subprocess if takes longer to finish gracefully
+
+TIMEOUT = None # cli arg; Terminate the subprocess if takes longer to finish gracefully
 
 WAIT_DELAY = timedelta(milliseconds=50)
 OUTPUT_REPORT_DELAY = timedelta(milliseconds=5)
 TERMINATION_DELAY = OUTPUT_REPORT_DELAY + timedelta(milliseconds=2)
+
+COMMUNICATION_QUEUE = multiprocessing.Queue() # for communication with subprocesses
 
 @contextmanager
 def patched_io(initial_in=None) -> Tuple[io.StringIO, io.StringIO, io.StringIO]:
@@ -70,18 +97,18 @@ def patched_io(initial_in=None) -> Tuple[io.StringIO, io.StringIO, io.StringIO]:
     sys.stdin, sys.stdout, sys.stderr = new_in, new_out, new_err
     yield sys.stdin, sys.stdout, sys.stderr
   finally:
+    sys.stdout.seek(0)
+    sys.stderr.seek(0)
     sys.stdin, sys.stdout, sys.stderr = old_in, old_out, old_err
 
 def main():
   args = parse_args()
   scripts: List[Path] = args.script
   max_processes = args.processes
-  global LOAD_TIMEOUT
-  LOAD_TIMEOUT = args.load_timeout
-  global COMPLETION_TIMEOUT
-  COMPLETION_TIMEOUT = args.completion_timeout
+  global TIMEOUT
+  TIMEOUT = args.timeout
 
-  queue = multiprocessing.Queue() # for communication with subprocesses
+  # queue = multiprocessing.Queue() # for communication with subprocesses
 
   index_pid = {} # key: index, value: pid
 
@@ -90,7 +117,7 @@ def main():
 
   timeouts: List[Tuple[int, datetime]] = [] # [(pid, datetime), (...), ...]
 
-  ready: List[multiprocessing.Process] = list(map(lambda x: multiprocessing.Process(target=runtest, args=(*x, queue)), enumerate(scripts)))
+  ready: List[multiprocessing.Process] = list(map(lambda x: multiprocessing.Process(target=runtest, args=(test_main, *x, COMMUNICATION_QUEUE)), enumerate(scripts)))
   running: List[multiprocessing.Process] = []
 
   while len(ready) > 0 or len(running) > 0:
@@ -107,11 +134,11 @@ def main():
       process.start()
 
     # print("timeouts", timeouts)
-    while queue.empty() and (len(timeouts) == 0 or timeouts[0][1] > datetime.now()) and (len(running) > 0 and running[0].is_alive()):
+    while COMMUNICATION_QUEUE.empty() and (len(timeouts) == 0 or timeouts[0][1] > datetime.now()) and (len(running) > 0 and running[0].is_alive()):
       time.sleep(WAIT_DELAY.total_seconds())
 
-    while not queue.empty():
-      pid, item = queue.get_nowait()
+    while not COMMUNICATION_QUEUE.empty():
+      pid, item = COMMUNICATION_QUEUE.get_nowait()
       if pid not in index_pid.values(): # item is the process index
         print(f"process {pid} is processing {scripts[item]}")
         index_pid[item] = pid
@@ -132,6 +159,7 @@ def main():
             # print(f"canceling timout of pid {pid} ({t})")
             del timeouts[i]
       else:
+        # pass
         raise RuntimeWarning("Invalid item in queue", item)
 
     timeouts.sort(key=lambda x: x[1])
@@ -164,21 +192,17 @@ def parse_args():
     help="Maximum number of processes to use in parallel.",
     type=int,
     default=os.cpu_count())
-  parser.add_argument('-l', '--load-timeout',
-    help="A test will be terminated if loading the script takes longer than this many milliseconds.",
-    type=lambda x: timedelta(milliseconds=float(x)),
-    default="1000")
-  parser.add_argument('-c', '--completion-timeout',
-    help="A test will be terminated if it takes longer than this many milliseconds.",
-    type=lambda x: timedelta(milliseconds=float(x)),
-    default="60000")
+  parser.add_argument('-t', '--timeout',
+    help="A test will be terminated if it takes longer than this many seconds.",
+    type=lambda x: timedelta(seconds=float(x)),
+    default="60")
   parser.add_argument('script',
     help="The script file to test. MUST end in '.py' (without quotes)!",
     nargs='+',
     type=filetype)
   return parser.parse_args()
 
-def runtest(index: int, scriptpath: Path, queue: multiprocessing.Queue):
+def runtest(test_function: Callable, index: int, scriptpath: Path, queue: multiprocessing.Queue = COMMUNICATION_QUEUE):
   output = io.StringIO()
   sys.stdout = output
   sys.stderr = output
@@ -193,29 +217,27 @@ def runtest(index: int, scriptpath: Path, queue: multiprocessing.Queue):
     t = threading.Thread(target=reportoutput, daemon=True)
     t.start()
 
-    original_stdin, original_stdout, original_stderr = sys.stdin, sys.stdout, sys.stderr
-    with patched_io(LIBRARY_LOAD_STDIN) as (_, stdout, stderr):
-      def testwrapper(lib, _):
-        sys.stdin, sys.stdout, sys.stderr = original_stdin, original_stdout, original_stderr
-        queue.put((pid, datetime.now() + COMPLETION_TIMEOUT))
-        test(lib, scriptpath, stdout, stderr)
-      queue.put((pid, datetime.now() + LOAD_TIMEOUT))
-      testscript(scriptpath, testwrapper)
+    queue.put((pid, datetime.now() + TIMEOUT))
+    test_function(scriptpath)
   except:
     traceback.print_exception(*sys.exc_info())
   queue.put((pid, output.getvalue()))
 
-# https://stackoverflow.com/a/52328080/2808520
-def testscript(scriptpath: Path, test: Callable):
+LOADED_LIBRARIES = {}
+def load_library(path: Path):
   '''
   Runs some tests with the given script.
   '''
-  assert(scriptpath.name.endswith('.py')) # thwart ModuleNotFoundError 
-  sys.path.insert(0, str(scriptpath.parent.absolute()))
-  imported_library = import_module(scriptpath.name[:-3])
-  test(imported_library, scriptpath)
-  del imported_library
-  sys.path.pop(0)
+  assert(path.name.endswith('.py')) # thwart ModuleNotFoundError 
+  lib = LOADED_LIBRARIES.get(path)
+  if lib:
+    lib = reload(lib)
+  else:
+    # https://stackoverflow.com/a/52328080/2808520
+    sys.path.insert(0, str(path.parent.absolute()))
+    lib = import_module(path.name[:-3])
+  LOADED_LIBRARIES[path] = lib
+  return lib
 
 if __name__ == '__main__':
   main()
