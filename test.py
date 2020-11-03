@@ -19,63 +19,67 @@ import threading
 import time
 import traceback
 from typing import Callable, Dict, List, Optional, Tuple
-import unittest
+import unittest # This module is not necessary for the testsuite, but will probably make testing the script easier
 
-TESTSUITE_DESCRIPTION = "testpythonscript sample testsuite" # displayed in help message
 
 LIBRARY = None # This will be set to the imported script
-LIBRARY_LOAD_STDIN = "patched stdin whilst loading the library" # This will be fed to stdin while the library is loading
+LIBRARY_PATH = None # This will be set to the imported script's path
 
-def reload_library(stdin=""):
+def load_library_patched(stdin=""):
   '''Decorator for reloading the library stored in LIBRARY'''
   def outer(func):
     @wraps(func)
     def inner(*args, **kwargs):
       global LIBRARY
       with patched_io(stdin) as (_, stdout, stderr):
-        LIBRARY = reload(LIBRARY)
+        LIBRARY = load_library(LIBRARY_PATH)
       func(*args, stdout, stderr, **kwargs)
     return inner
   return outer
 
+
+################################################################################
+# Add your tests below this comment.
+################################################################################
+
+
+TESTSUITE_DESCRIPTION = "testpythonscript sample testsuite" # displayed in help message
+
+def test_main(library_path: Path):
+  global LIBRARY_PATH
+  LIBRARY_PATH = library_path
+  unittest.main(argv=['first-arg-is-ignored'], verbosity=2, exit=False) # https://medium.com/@vladbezden/using-python-unittest-in-ipython-or-jupyter-732448724e31
+
+  print(f"Completed testing {library_path}")
+
 class Test(unittest.TestCase):
-  def test_initial_attributes(self):
+  @load_library_patched(stdin="\n")
+  def test_initial_attributes(self, load_stdout, load_stderr):
     self.assertTrue(hasattr(LIBRARY, "LIVES"))
     self.assertEqual(LIBRARY.LIVES, 3)
 
-  def test_foo(self):
+  @load_library_patched(stdin="\n")
+  def test_foo(self, load_stdout, load_stderr):
     self.assertTrue(hasattr(LIBRARY, "foo"))
     with patched_io() as (stdin, stdout, stderr):
       LIBRARY.foo()
       self.assertEqual("foo\nbar\n", stdout.getvalue())
 
-  def test_false(self):
-    self.skipTest("ignore")
+  @load_library_patched(stdin="\n")
+  def test_false(self, load_stdout, load_stderr):
     self.assertTrue(LIBRARY.return_true())
 
-  @reload_library(stdin="Some stdin patch")
-  def test_zoo(self, load_stdout, load_stderr):
+  @load_library_patched(stdin="Some stdin patch")
+  def test_library_load_stdin(self, load_stdout, load_stderr):
     self.assertEqual(f"Library load input() returned: Some stdin patch\n", load_stdout.readlines()[1])
 
-
-
-
-def test(filename: Path):
-  global LIBRARY
-  with load_library(filename, LIBRARY_LOAD_STDIN) as (lib, lib_load_stdout, lib_load_stderr):
-    LIBRARY = lib
-    print("Library load stderr:")
-    print(lib_load_stderr.getvalue())
-    unittest.main(argv=['first-arg-is-ignored'], verbosity=2, exit=False) # https://medium.com/@vladbezden/using-python-unittest-in-ipython-or-jupyter-732448724e31
-    LIBRARY = None
-
-  print(f"Completed testing {filename}")
 
 ################################################################################
 # The testsuite's internals are below.
 # You shouldn't need to edit the rest of the file. (Please submit a pull request
 #   to https://github.com/SimonLammer/testpythonscript otherwise)
 ################################################################################
+
 
 LOAD_TIMEOUT = None       # cli arg; Terminate the subprocess if importing the library takes longer
 COMPLETION_TIMEOUT = None # cli arg; Terminate the subprocess if takes longer to finish gracefully
@@ -116,7 +120,7 @@ def main():
 
   timeouts: List[Tuple[int, datetime]] = [] # [(pid, datetime), (...), ...]
 
-  ready: List[multiprocessing.Process] = list(map(lambda x: multiprocessing.Process(target=runtest, args=(test, *x, COMMUNICATION_QUEUE)), enumerate(scripts)))
+  ready: List[multiprocessing.Process] = list(map(lambda x: multiprocessing.Process(target=runtest, args=(test_main, *x, COMMUNICATION_QUEUE)), enumerate(scripts)))
   running: List[multiprocessing.Process] = []
 
   while len(ready) > 0 or len(running) > 0:
@@ -205,7 +209,7 @@ def parse_args():
     type=filetype)
   return parser.parse_args()
 
-def runtest(test_function: Callable, index: int, scriptpath: Path, queue: multiprocessing.Queue = COMMUNICATION_QUEUE, library_load_stdin : str = LIBRARY_LOAD_STDIN):
+def runtest(test_function: Callable, index: int, scriptpath: Path, queue: multiprocessing.Queue = COMMUNICATION_QUEUE):
   output = io.StringIO()
   sys.stdout = output
   sys.stderr = output
@@ -220,36 +224,27 @@ def runtest(test_function: Callable, index: int, scriptpath: Path, queue: multip
     t = threading.Thread(target=reportoutput, daemon=True)
     t.start()
 
-    # original_stdin, original_stdout, original_stderr = sys.stdin, sys.stdout, sys.stderr
-    # with patched_io(library_load_stdin) as (_, stdout, stderr):
-      # def testwrapper(lib, _):
-      #   sys.stdin, sys.stdout, sys.stderr = original_stdin, original_stdout, original_stderr
-      #   queue.put((pid, datetime.now() + COMPLETION_TIMEOUT))
-      #   test_function(lib, scriptpath, stdout, stderr)
-      # queue.put((pid, datetime.now() + LOAD_TIMEOUT))
-      # testscript(scriptpath, testwrapper)
     queue.put((pid, datetime.now() + COMPLETION_TIMEOUT))
-    test(scriptpath)
+    test_function(scriptpath)
   except:
     traceback.print_exception(*sys.exc_info())
   queue.put((pid, output.getvalue()))
 
-@contextmanager
-def load_library(path: Path, stdin: str = ''):
-  # https://stackoverflow.com/a/52328080/2808520
+LOADED_LIBRARIES = {}
+def load_library(path: Path):
   '''
   Runs some tests with the given script.
   '''
   assert(path.name.endswith('.py')) # thwart ModuleNotFoundError 
-  imported_library = None
-  try:
+  lib = LOADED_LIBRARIES.get(path)
+  if lib:
+    lib = reload(lib)
+  else:
+    # https://stackoverflow.com/a/52328080/2808520
     sys.path.insert(0, str(path.parent.absolute()))
-    with patched_io(stdin) as (_, stdout, stderr):
-      imported_library = import_module(path.name[:-3])
-    yield imported_library, stdout, stderr
-  finally:
-    del imported_library
-    sys.path.pop(0)
+    lib = import_module(path.name[:-3])
+  LOADED_LIBRARIES[path] = lib
+  return lib
 
 if __name__ == '__main__':
   main()

@@ -14,28 +14,27 @@ Here's what happens when you run the current [`test.py`](./test.py) against [`sa
 
 `python3 test.py sample_script.py`:
 ```
-process 27434 is processing sample_script.py
-process 27434 finished with exit code 0
+process 13119 is processing sample_script.py
+process 13119 finished with exit code 0
 ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 Output of sample_script.py test (exitcode 0):
-Library load stdout:
-sample_script.py loading
-Library load input() returned: patched stdin whilst loading the library
-
 test_false (__main__.Test) ... FAIL
 test_foo (__main__.Test) ... ok
 test_initial_attributes (__main__.Test) ... ok
+test_library_load_stdin (__main__.Test) ... ok
 
 ======================================================================
 FAIL: test_false (__main__.Test)
 ----------------------------------------------------------------------
 Traceback (most recent call last):
-  File "test.py", line 40, in test_false
+  File "test.py", line 36, in inner
+    func(*args, stdout, stderr, **kwargs)
+  File "test.py", line 70, in test_false
     self.assertTrue(LIBRARY.return_true())
 AssertionError: False is not true
 
 ----------------------------------------------------------------------
-Ran 3 tests in 0.000s
+Ran 4 tests in 0.001s
 
 FAILED (failures=1)
 Completed testing sample_script.py
