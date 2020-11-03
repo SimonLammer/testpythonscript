@@ -19,7 +19,7 @@ import threading
 import time
 import traceback
 from typing import Callable, Dict, List, Optional, Tuple
-import unittest # This module is not necessary for the testsuite, but will probably make testing the script easier
+import unittest # This module is not necessary for the testsuite, but will probably ease your testing
 
 
 LIBRARY = None # This will be set to the imported script
